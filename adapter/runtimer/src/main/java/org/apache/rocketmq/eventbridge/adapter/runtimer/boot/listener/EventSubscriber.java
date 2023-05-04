@@ -37,7 +37,7 @@ public abstract class EventSubscriber implements TargetRunnerListener {
      *
      * @return
      */
-    public abstract List<ConnectRecord> pull();
+    public abstract List<ConnectRecord> pull(String runnerName);
 
     /**
      * Commit the connect records.

@@ -34,7 +34,6 @@ import org.apache.rocketmq.eventbridge.adapter.runtimer.config.RuntimerConfigDef
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.util.Assert;
 
 import java.util.List;
 import java.util.Map;
@@ -49,9 +48,9 @@ public class CirculatorContext implements TargetRunnerListener {
 
     private final static Logger logger = LoggerFactory.getLogger(LoggerName.EventBus_Listener);
 
-    private BlockingQueue<ConnectRecord> eventQueue = new LinkedBlockingQueue<>(50000);
+    private Map<String/*RunnerName*/, BlockingQueue<ConnectRecord>> eventQueue;
 
-    private BlockingQueue<ConnectRecord> targetQueue = new LinkedBlockingQueue<>(50000);
+    private Map<String/*RunnerName*/, BlockingQueue<ConnectRecord>> targetQueue;
 
     private Map<String/*RunnerName*/, TransformEngine<ConnectRecord>> taskTransformMap = new ConcurrentHashMap<>(20);
 
@@ -59,14 +58,19 @@ public class CirculatorContext implements TargetRunnerListener {
 
     private Map<String/*PusherCLass*/, ExecutorService> pusherExecutorMap = new ConcurrentHashMap<>(10);
 
+    private BlockingQueue<String> eventBusRunnerNameQueue = new LinkedBlockingQueue<>(100);
+    private BlockingQueue<String> eventRuleRunnerNameQueue = new LinkedBlockingQueue<>(100);
+    private BlockingQueue<String> eventTargetRunnerNameQueue = new LinkedBlockingQueue<>(100);
+
     private Plugin plugin;
 
-    public CirculatorContext(Plugin plugin){
+    public CirculatorContext(Plugin plugin) {
         this.plugin = plugin;
     }
 
     /**
      * initial targetRunnerMap, taskTransformMap, pusherTaskMap
+     *
      * @param targetRunnerConfigs
      */
     public void initListenerMetadata(Set<TargetRunnerConfig> targetRunnerConfigs) {
@@ -75,6 +79,8 @@ public class CirculatorContext implements TargetRunnerListener {
         }
         for (TargetRunnerConfig targetRunnerConfig : targetRunnerConfigs) {
             onAddTargetRunner(targetRunnerConfig);
+            // 首次启动添加默认拉取任务
+            eventTargetRunnerNameQueue.offer(targetRunnerConfig.getName());
         }
     }
 
@@ -98,8 +104,8 @@ public class CirculatorContext implements TargetRunnerListener {
      *
      * @param connectRecords
      */
-    public boolean offerEventRecords(List<ConnectRecord> connectRecords) {
-        return eventQueue.addAll(connectRecords);
+    public boolean offerEventRecords(String runnerName, List<ConnectRecord> connectRecords) {
+        return eventQueue.get(runnerName).addAll(connectRecords);
     }
 
     /**
@@ -107,12 +113,12 @@ public class CirculatorContext implements TargetRunnerListener {
      *
      * @return
      */
-    public ConnectRecord takeEventRecord() {
+    public ConnectRecord takeEventRecord(String runnerName) {
         if (eventQueue.isEmpty()) {
             return null;
         }
         try {
-            return eventQueue.take();
+            return eventQueue.get(runnerName).take();
         } catch (Exception exception) {
             logger.error("take event record exception - stack-> ", exception);
         }
@@ -127,16 +133,65 @@ public class CirculatorContext implements TargetRunnerListener {
         return pusherTaskMap;
     }
 
-    public boolean offerTargetTaskQueue(List<ConnectRecord> connectRecords) {
-        return targetQueue.addAll(connectRecords);
+    public boolean offerTargetTaskQueue(String runnerName, List<ConnectRecord> connectRecords) {
+        return targetQueue.get(runnerName).addAll(connectRecords);
     }
 
-    public ConnectRecord takeTargetMap() {
+    public ConnectRecord takeTargetMap(String runnerName) {
         if (targetQueue.isEmpty()) {
             return null;
         }
         try {
-            return targetQueue.take();
+            return targetQueue.get(runnerName).take();
+        } catch (Exception exception) {
+            exception.printStackTrace();
+        }
+        return null;
+    }
+
+
+    public boolean offerEventBusRunnerNameQueue(String runnerName) {
+        return eventBusRunnerNameQueue.offer(runnerName);
+    }
+
+    public String takeEventBusRunnerName() {
+        if (eventBusRunnerNameQueue.isEmpty()) {
+            return null;
+        }
+        try {
+            return eventBusRunnerNameQueue.take();
+        } catch (Exception exception) {
+            exception.printStackTrace();
+        }
+        return null;
+    }
+
+    public boolean offerEventRuleRunnerNameQueue(String runnerName) {
+        return eventRuleRunnerNameQueue.offer(runnerName);
+    }
+
+    public String takeEventRuleRunnerName() {
+        if (eventRuleRunnerNameQueue.isEmpty()) {
+            return null;
+        }
+        try {
+            return eventRuleRunnerNameQueue.take();
+        } catch (Exception exception) {
+            exception.printStackTrace();
+        }
+        return null;
+    }
+
+    public boolean offerEventTargetRunnerNameQueue(String runnerName) {
+        return eventTargetRunnerNameQueue.offer(runnerName);
+    }
+
+    public String takeEventTargetRunnerName() {
+        if (eventTargetRunnerNameQueue.isEmpty()) {
+            return null;
+        }
+        try {
+            return eventTargetRunnerNameQueue.take();
         } catch (Exception exception) {
             exception.printStackTrace();
         }
@@ -145,15 +200,17 @@ public class CirculatorContext implements TargetRunnerListener {
 
     /**
      * get specific thread pool by push name
+     *
      * @param pushName
      * @return
      */
-    public ExecutorService getExecutorService(String pushName){
+    public ExecutorService getExecutorService(String pushName) {
         return pusherExecutorMap.get(pushName);
     }
 
     /**
      * refresh target runner where config changed
+     *
      * @param targetRunnerConfig
      * @param refreshTypeEnum
      */
@@ -165,7 +222,7 @@ public class CirculatorContext implements TargetRunnerListener {
                 TransformEngine<ConnectRecord> transformChain = new TransformEngine<>(targetRunnerConfig.getComponents(), plugin);
                 taskTransformMap.put(runnerName, transformChain);
 
-                int endIndex = targetRunnerConfig.getComponents().size() -1;
+                int endIndex = targetRunnerConfig.getComponents().size() - 1;
                 TargetKeyValue targetKeyValue = new TargetKeyValue(targetRunnerConfig.getComponents().get(endIndex));
                 SinkTask sinkTask = initTargetSinkTask(targetKeyValue);
                 pusherTaskMap.put(runnerName, sinkTask);
@@ -175,10 +232,20 @@ public class CirculatorContext implements TargetRunnerListener {
                     pusherExecutorMap.put(pusherClass, initDefaultThreadPoolExecutor(pusherClass));
                 }
 
+                if (!eventQueue.containsKey(runnerName)) {
+                    eventQueue.put(runnerName, new LinkedBlockingQueue<>(50000));
+                }
+                if (!targetQueue.containsKey(runnerName)) {
+                    targetQueue.put(runnerName, new LinkedBlockingQueue<>(50000));
+                }
+
                 break;
             case DELETE:
                 taskTransformMap.remove(runnerName);
                 pusherTaskMap.remove(runnerName);
+
+                eventQueue.remove(runnerName);
+                targetQueue.remove(runnerName);
                 break;
             default:
                 break;
@@ -187,6 +254,7 @@ public class CirculatorContext implements TargetRunnerListener {
 
     /**
      * init default thread poll param, support auto config
+     *
      * @param threadPollName
      * @return
      */
@@ -197,6 +265,7 @@ public class CirculatorContext implements TargetRunnerListener {
 
     /**
      * init target sink task
+     *
      * @param targetKeyValue
      * @return
      */
@@ -220,7 +289,7 @@ public class CirculatorContext implements TargetRunnerListener {
                 Plugin.compareAndSwapLoaders(loader);
             }
             return sinkTask;
-        }catch (Exception e) {
+        } catch (Exception e) {
             e.printStackTrace();
         }
         return null;

@@ -237,6 +237,7 @@ public class LitePullConsumerImpl implements LitePullConsumer {
                     log.warn("Local cache is full, delay the pull task {} ms for message queue {}",
                             delayTimeMillis, messageQueue);
                     pullLater(PullTask.this, delayTimeMillis, TimeUnit.MILLISECONDS);
+                    // TODO 是否应该return ？
                 }
 
                 rocketmqPullConsumer.pullBlockIfNotFound(this.messageQueue, this.tag, offset, batchNums, new PullCallback() {

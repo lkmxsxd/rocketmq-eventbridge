@@ -18,7 +18,6 @@
 package org.apache.rocketmq.eventbridge.adapter.runtimer.boot;
 
 import io.openmessaging.connector.api.data.ConnectRecord;
-import java.util.List;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.rocketmq.eventbridge.adapter.runtimer.boot.listener.CirculatorContext;
 import org.apache.rocketmq.eventbridge.adapter.runtimer.boot.listener.EventSubscriber;
@@ -26,6 +25,8 @@ import org.apache.rocketmq.eventbridge.adapter.runtimer.common.ServiceThread;
 import org.apache.rocketmq.eventbridge.adapter.runtimer.error.ErrorHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 /**
  * listen the event and offer to queue
@@ -43,7 +44,7 @@ public class EventBusListener extends ServiceThread {
     private final ErrorHandler errorHandler;
 
     public EventBusListener(CirculatorContext circulatorContext, EventSubscriber eventSubscriber,
-        ErrorHandler errorHandler) {
+                            ErrorHandler errorHandler) {
         this.circulatorContext = circulatorContext;
         this.eventSubscriber = eventSubscriber;
         this.errorHandler = errorHandler;
@@ -53,12 +54,15 @@ public class EventBusListener extends ServiceThread {
     public void run() {
         while (!stopped) {
             try {
-                List<ConnectRecord> recordList = eventSubscriber.pull();
+                String runnerName = circulatorContext.takeEventTargetRunnerName();
+                List<ConnectRecord> recordList = eventSubscriber.pull(runnerName);
                 if (CollectionUtils.isEmpty(recordList)) {
                     this.waitForRunning(1000);
                     continue;
                 }
-                circulatorContext.offerEventRecords(recordList);
+                circulatorContext.offerEventRecords(runnerName, recordList);
+                // 消息拉取完毕，通知transfer处理
+                circulatorContext.offerEventBusRunnerNameQueue(runnerName);
             } catch (Exception exception) {
                 logger.error(getServiceName() + " - event bus pull record exception, stackTrace - ", exception);
             }

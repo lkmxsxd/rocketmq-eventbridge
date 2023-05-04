@@ -53,7 +53,8 @@ public class EventTargetPusher extends ServiceThread {
     @Override
     public void run() {
         while (!stopped) {
-            ConnectRecord targetRecord = circulatorContext.takeTargetMap();
+            String ruleRunnerName = circulatorContext.takeEventRuleRunnerName();
+            ConnectRecord targetRecord = circulatorContext.takeTargetMap(ruleRunnerName);
             if (Objects.isNull(targetRecord)) {
                 logger.info("current target pusher is empty");
                 this.waitForRunning(1000);
@@ -70,6 +71,8 @@ public class EventTargetPusher extends ServiceThread {
                     SinkTask sinkTask = circulatorContext.getPusherTaskMap().get(runnerName);
                     sinkTask.put(Lists.newArrayList(targetRecord));
                     offsetManager.commit(targetRecord);
+                    // pusher推送完毕，写入队列通知bus拉取消息
+                    circulatorContext.offerEventTargetRunnerNameQueue(runnerName);
                 } catch (Exception exception) {
                     logger.error(getServiceName() + " push target exception, record - " + targetRecord + " , stackTrace-", exception);
                 }
